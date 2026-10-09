@@ -1,0 +1,60 @@
+apiVersion: apps/v1
+kind: Deployment
+
+metadata:
+  name: etl-agent
+  labels:
+    app: etl-agent
+
+spec:
+  replicas: 1
+
+  selector:
+    matchLabels:
+      app: etl-agent
+
+  template:
+    metadata:
+      labels:
+        app: etl-agent
+
+    spec:
+      restartPolicy: Always
+
+      containers:
+        - name: etl-agent
+
+          image: yklee2002/etl-agent
+
+          imagePullPolicy: Always
+
+          env:
+            - name: DB_HOST
+              value: "mysql"
+
+            - name: DB_PORT
+              value: "3306"
+
+            - name: DB_USER
+              value: "root"
+
+            - name: DB_PASSWORD
+              value: "root1234"
+
+            - name: SOURCE_DB
+              value: "orderdb"
+
+            - name: TARGET_DB
+              value: "analytics"
+
+            - name: CHECK_INTERVAL
+              value: "30"
+
+          resources:
+            requests:
+              cpu: "100m"
+              memory: "128Mi"
+
+            limits:
+              cpu: "500m"
+              memory: "256Mi"

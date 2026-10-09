@@ -1,0 +1,88 @@
+# 학생 실습 1단계: MySQL 주문 -> Parquet -> MinIO
+# 먼저 수정할 값:
+# 1) MINIO_ENDPOINT: 실제 S3 API Service DNS와 포트
+# 2) Secret의 CHANGE_ME_* 3개: 실제 인증정보
+# 3) Deployment image: 빌드하고 push한 실제 이미지 이름
+# 앱 namespace는 default로 지정. 변경하려면 3개 metadata.namespace를 함께 수정.
+# MySQL이 다른 namespace면 MYSQL_HOST에 전체 Service DNS를 지정.
+# 적용: kubectl apply -f order-etl.yaml
+# 로그: kubectl -n default logs -f deployment/order-etl
+# 설정을 변경한 뒤: kubectl -n default rollout restart deployment/order-etl
+
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: order-etl-config
+  namespace: default
+data:
+  MYSQL_HOST: "mysql"
+  MYSQL_PORT: "3306"
+  MYSQL_USER: "root"
+  MYSQL_DATABASE: "orderdb"
+  MYSQL_TABLE: "orders"
+  # 예시 주소: kubectl get svc -A로 실제 S3 Service/namespace/포트를 확인하세요.
+  MINIO_ENDPOINT: "https://aistor-server.aistor-server.svc.cluster.local:443"
+  MINIO_BUCKET: "warehouse"
+  MINIO_PREFIX: "raw/orders_step1/"
+  CREATE_BUCKET: "true"
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: order-etl-secret
+  namespace: default
+type: Opaque
+stringData:
+  MYSQL_PASSWORD: "root1234"
+  MINIO_ACCESS_KEY: "admin"
+  MINIO_SECRET_KEY: "admin1234"
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: order-etl
+  namespace: default
+spec:
+  # 코드의 checkpoint를 단일 ETL이 갱신하므로 1개 유지.
+  replicas: 1
+  # 이미지 갱신 중에도 이전/새 Pod가 동시에 수집하지 않도록 설정.
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: order-etl
+  template:
+    metadata:
+      labels:
+        app: order-etl
+    spec:
+      automountServiceAccountToken: false
+      terminationGracePeriodSeconds: 90
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+      # 사설 registry를 쓰면 기존 pull Secret을 아래에 지정하세요.
+      # imagePullSecrets:
+      #   - name: registry-credentials
+      containers:
+        - name: etl
+          image: "yklee2002/etl-minio"
+          imagePullPolicy: Always
+          command: ["python", "-u", "/app/etl_orders_minio.py"]
+          envFrom:
+            - configMapRef:
+                name: order-etl-config
+            - secretRef:
+                name: order-etl-secret
+          resources:
+            requests:
+              cpu: "100m"
+              memory: "128Mi"
+            limits:
+              cpu: "1"
+              memory: "512Mi"
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
