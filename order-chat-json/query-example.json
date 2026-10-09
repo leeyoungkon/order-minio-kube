@@ -1,0 +1,127 @@
+{
+  "plan": {
+    "status": "ready",
+    "steps": [
+      {
+        "id": "s1",
+        "title": "오늘 주문액 공동 1위 고객",
+        "operation": "query",
+        "period": {
+          "kind": "today"
+        },
+        "group_by": [
+          "customer_id"
+        ],
+        "aggregates": [
+          {
+            "function": "sum",
+            "column": "amount",
+            "alias": "amount"
+          }
+        ],
+        "order_by": [
+          {
+            "column": "amount",
+            "direction": "desc"
+          }
+        ],
+        "limit": 1,
+        "keep_ties": true
+      },
+      {
+        "id": "s2",
+        "title": "선정 고객의 오늘 제품별 수량",
+        "operation": "query",
+        "period": {
+          "kind": "today"
+        },
+        "filters": [
+          {
+            "column": "customer_id",
+            "operator": "in",
+            "ref": {
+              "step": "s1",
+              "column": "customer_id"
+            }
+          }
+        ],
+        "group_by": [
+          "customer_id",
+          "product_id",
+          "product_name"
+        ],
+        "aggregates": [
+          {
+            "function": "sum",
+            "column": "quantity",
+            "alias": "quantity"
+          },
+          {
+            "function": "sum",
+            "column": "amount",
+            "alias": "amount"
+          },
+          {
+            "function": "count",
+            "column": "*",
+            "alias": "orders"
+          }
+        ]
+      },
+      {
+        "id": "s3",
+        "title": "고객별 최대 제품 수량",
+        "operation": "query",
+        "source": "s2",
+        "group_by": [
+          "customer_id"
+        ],
+        "aggregates": [
+          {
+            "function": "max",
+            "column": "quantity",
+            "alias": "peak"
+          }
+        ]
+      },
+      {
+        "id": "s4",
+        "title": "고객별 공동 최다 품목",
+        "operation": "join",
+        "source": "s2",
+        "right": "s3",
+        "on": [
+          {
+            "left": "customer_id",
+            "right": "customer_id"
+          },
+          {
+            "left": "quantity",
+            "right": "peak"
+          }
+        ]
+      },
+      {
+        "id": "s5",
+        "title": "품목 결과 표시",
+        "operation": "query",
+        "source": "s4",
+        "select": [
+          "customer_id",
+          "product_id",
+          "product_name",
+          "quantity",
+          "amount",
+          "orders"
+        ],
+        "order_by": [
+          {
+            "column": "customer_id",
+            "direction": "asc"
+          }
+        ]
+      }
+    ],
+    "output": "s5"
+  }
+}

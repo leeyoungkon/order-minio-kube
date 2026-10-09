@@ -6,7 +6,6 @@ import json
 import logging
 import math
 import os
-import re
 from collections import defaultdict
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
@@ -26,15 +25,14 @@ from order_data import ParquetStore, Settings
 LOG = logging.getLogger("order-chat")
 KST = ZoneInfo("Asia/Seoul")
 UTC = timezone.utc
-VERSION = "1.1"
+VERSION = "1.0"
 PRODUCTS = {"P001":"Laptop", "P002":"Monitor", "P003":"Keyboard", "P004":"Mouse", "P005":"Server"}
 
 
 class QueryPlan(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    action: Literal["summary", "ranking", "trend", "compare", "orders", "top_customer_products", "unsupported"] = "summary"
+    action: Literal["summary", "ranking", "trend", "compare", "orders", "unsupported"] = "summary"
     metric: Literal["quantity", "amount", "orders"] = "amount"
-    customer_metric: Literal["quantity", "amount", "orders"] = "amount"
     group_by: Literal["customer", "product"] = "customer"
     period: Literal["today", "yesterday", "last5m", "last1h", "last24h", "all", "custom"] = "today"
     start: datetime | None = None
@@ -99,25 +97,6 @@ def totals(rows):
                 customers=len({r.customer_id for r in rows}), products=len({r.product_id for r in rows}))
 
 
-def direct_compound_plan(question):
-    """명확한 '오늘 주문액 1위 고객의 최다 주문 품목' 표현은 모델 해석 실패를 피합니다.
-
-    기간·ID·추가 조건이 있는 표현은 일반 Gemma 계획 생성으로 보냅니다.
-    """
-    text = re.sub(r"\s+", "", question)
-    if not re.search(r"오늘|금일", text):
-        return None
-    if re.search(r"C\d+|P\d+|어제|최근|시간|분|지난|[0-9]{4}-|비교|제외|이상|이하|중에서", text, re.I):
-        return None
-    customer = r"(?:오늘|금일)(?:제일|가장)?주문액(?:이|이가)?(?:제일|가장|최고로)?(?:큰|높은|많은)(?:사람|고객)(?:이|의|은|는)?"
-    product = r"(?:가장많이|제일많이|최다)(?:주문한|주문하는|주문)?(?:품목|제품|상품)"
-    suffix = r"(?:은|는|을|를)?(?:찾아줘|알려줘|알려주세요|찾아주세요|찾기|뭐야|뭔지|무엇인가|알려줄래)?[?!.]*"
-    if re.fullmatch(customer + product + suffix, text):
-        return QueryPlan(action="top_customer_products", customer_metric="amount",
-                         metric="quantity", group_by="product", period="today", limit=1)
-    return None
-
-
 def execute_plan(plan, orders, now):
     """허용된 집계만 실행합니다. 모델이 생성한 SQL/Python은 실행하지 않습니다."""
     start, end = bounds(plan, orders, now)
@@ -139,57 +118,7 @@ def execute_plan(plan, orders, now):
                   summary=totals(rows), rows=[], rows_total=0, truncated=False)
     latest = max((as_kst(r.ordered_at) for r in filtered), default=None)
     result["latest_order"] = latest.isoformat() if latest else None
-    if plan.action == "top_customer_products":
-        result["group_by"] = "product"
-        # 고객 선정은 지정 기간의 모든 제품 주문으로 계산합니다.
-        # product_ids는 선정된 고객의 제품 순위를 구할 때만 적용합니다.
-        candidates = [r for r in orders
-                      if (not plan.customer_ids or r.customer_id in plan.customer_ids)
-                      and in_period(r, start, end, inclusive_end)]
-        customers = defaultdict(list)
-        for row in candidates:
-            customers[row.customer_id].append(row)
-        scores = {key: totals(group) for key, group in customers.items()}
-        maximum = max((Decimal(str(value[plan.customer_metric])) for value in scores.values()), default=None)
-        winners = sorted(key for key, value in scores.items()
-                         if Decimal(str(value[plan.customer_metric])) == maximum)
-        selected = [r for r in rows if r.customer_id in winners]
-        result["summary"] = totals(selected)
-        result["customer_ids"] = winners
-        result["customer_selection"] = dict(metric=plan.customer_metric,
-                                            value=format(maximum, ".2f") if maximum is not None else None,
-                                            tied_customers=len(winners))
-        cells = []
-        total_cells = 0
-        for customer in winners:
-            cells.append(dict(stage="고객 선정", entity=customer, customer_id=customer,
-                              rank=1, **scores[customer]))
-            products = defaultdict(list)
-            for row in selected:
-                if row.customer_id == customer:
-                    products[row.product_id].append(row)
-            product_cells = [dict(stage="품목 순위", entity=key, customer_id=customer,
-                                  product_id=key, product_name=PRODUCTS.get(key,key), **totals(group))
-                             for key, group in products.items()]
-            product_cells.sort(key=lambda r:(-Decimal(str(r[plan.metric])),r["entity"]))
-            previous_value, rank = None, 0
-            for index, cell in enumerate(product_cells, 1):
-                value = Decimal(str(cell[plan.metric]))
-                if value != previous_value:
-                    rank = index
-                cell["rank"], previous_value = rank, value
-            # 공동 순위는 임의로 한 제품만 고르지 않습니다.
-            if product_cells:
-                cutoff = Decimal(str(product_cells[min(plan.limit,len(product_cells))-1][plan.metric]))
-                cells.extend(c for c in product_cells if Decimal(str(c[plan.metric])) >= cutoff)
-            total_cells += 1 + len(product_cells)
-        result["rows_total"] = total_cells
-        cells = cells[:20]
-        result["selection_note"] = (
-            "1단계는 지정 기간의 고객별 전체 제품 주문 합계로 1위를 선정합니다. "
-            "2단계는 그 고객의 같은 기간 주문만 제품별로 합산합니다. 고객·품목 동률은 공동 순위입니다. "
-            "화면의 합계는 선정 고객의 최종 제품 필터에 해당하는 전체 합계입니다. 근거표는 최대 20행입니다.")
-    elif plan.action == "summary":
+    if plan.action == "summary":
         cells = [totals(rows)] if rows else []
     elif plan.action == "ranking":
         groups = defaultdict(list)
@@ -284,9 +213,6 @@ class Ollama:
         return value
 
     async def plan(self, request, orders, now):
-        direct = direct_compound_plan(request.question)
-        if direct is not None:
-            return direct
         metadata = dict(current_kst=as_kst(now).isoformat(),
                         customer_ids=sorted({r.customer_id for r in orders})[:100],
                         products=PRODUCTS)
@@ -294,16 +220,8 @@ class Ollama:
 질문과 최근 대화를 참고해 고객·제품·기간을 선택한다. 질문에 기간이 없으면 today.
 action: summary=합계, ranking=고객/제품 순위, trend=시간별 변화/증감,
 compare=지정 기간과 바로 앞 동일 길이 기간 비교, orders=최근 주문 상세,
-top_customer_products=1위 고객을 먼저 찾고 그 고객의 제품별 주문 순위를 조회,
 unsupported=데이터로 답할 수 없거나 명확한 질문이 필요한 경우.
 metric: quantity=수량, amount=주문액, orders=주문건수. group_by는 customer 또는 product.
-customer_metric은 top_customer_products의 고객 선정 지표이며 metric은 그 고객의 제품 순위 지표다.
-예: '오늘 제일 주문액이 큰 사람이 가장 많이 주문한 품목' →
-action=top_customer_products, period=today, customer_metric=amount, metric=quantity, group_by=product, limit=1.
-예: '어제 주문량 1위 고객의 제품별 주문액 순위' →
-action=top_customer_products, period=yesterday, customer_metric=quantity, metric=amount, group_by=product.
-'가장 많이 주문한 품목'은 주문 수량 합계 기준이다. 이 복합 조회를 unsupported나 전체 제품 ranking으로 바꾸지 않는다.
-top_customer_products의 product_ids는 고객 선정 뒤의 제품 필터이며 고객 선정은 전체 제품 합계다.
 고객 이름·주소·재고·매출이익·원인·미래 예측은 데이터에 없으므로 unsupported.
 기간은 today/yesterday/last5m/last1h/last24h/all/custom 중 선택한다.
 custom은 +09:00 한국 시간의 ISO start/end가 필수이고 종료 경계는 제외한다.
@@ -333,12 +251,6 @@ reason은 unsupported인 이유 또는 필요한 확인 정보를 한국어로 �
 금액은 원, quantity는 수량, orders는 주문건수다. amount 문자열은 정확한 계산값이다.
 수치는 계산 결과 그대로 인용하고 새 수치나 원인을 지어내지 않는다.
 답변의 수치에는 [R1]처럼 해당 evidence_id를 붙인다. summary는 기간 전체 합계다.
-top_customer_products는 고객 선정 → 선정 고객의 품목 순위 두 단계 조회다.
-stage='고객 선정' 행은 customer_selection.metric 기준 고객 합계이며,
-stage='품목 순위' 행은 해당 customer_id만의 제품 합계다. 두 종류의 행을 더하면 중복이므로 더하지 않는다.
-고객 선정 근거와 품목 순위 근거를 각각 인용한다. 고객 총 주문액과 품목의 주문 수량을 구분한다.
-customer_selection.tied_customers가 2 이상이면 공동 1위이며, 제품 rank=1이 여러 개이면 공동 최다 품목이다.
-선정 고객에게 품목 순위 행이 없으면 해당 제품 조건의 주문이 없다고 말한다.
 truncated=true이면 표는 일부 행이며 전체 고객/시간 구간을 모두 설명했다고 말하지 않는다.
 delta_pct가 null이면 증감률을 계산할 수 없다고 말한다.
 데이터에 없는 고객 정보·실제 원인·미래 전망은 확인할 수 없다고 말한다.

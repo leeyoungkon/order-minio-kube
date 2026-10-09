@@ -1,0 +1,609 @@
+[
+  {
+    "question": "오늘 제일 주문액이 큰 사람이 가장 많이 주문한 품목은?",
+    "plan": {
+      "status": "ready",
+      "steps": [
+        {
+          "id": "s1",
+          "title": "오늘 주문액 공동 1위 고객",
+          "operation": "query",
+          "period": {
+            "kind": "today"
+          },
+          "group_by": [
+            "customer_id"
+          ],
+          "aggregates": [
+            {
+              "function": "sum",
+              "column": "amount",
+              "alias": "amount"
+            }
+          ],
+          "order_by": [
+            {
+              "column": "amount",
+              "direction": "desc"
+            }
+          ],
+          "limit": 1,
+          "keep_ties": true
+        },
+        {
+          "id": "s2",
+          "title": "선정 고객의 오늘 제품별 수량",
+          "operation": "query",
+          "period": {
+            "kind": "today"
+          },
+          "filters": [
+            {
+              "column": "customer_id",
+              "operator": "in",
+              "ref": {
+                "step": "s1",
+                "column": "customer_id"
+              }
+            }
+          ],
+          "group_by": [
+            "customer_id",
+            "product_id",
+            "product_name"
+          ],
+          "aggregates": [
+            {
+              "function": "sum",
+              "column": "quantity",
+              "alias": "quantity"
+            },
+            {
+              "function": "sum",
+              "column": "amount",
+              "alias": "amount"
+            },
+            {
+              "function": "count",
+              "column": "*",
+              "alias": "orders"
+            }
+          ]
+        },
+        {
+          "id": "s3",
+          "title": "고객별 최대 제품 수량",
+          "operation": "query",
+          "source": "s2",
+          "group_by": [
+            "customer_id"
+          ],
+          "aggregates": [
+            {
+              "function": "max",
+              "column": "quantity",
+              "alias": "peak"
+            }
+          ]
+        },
+        {
+          "id": "s4",
+          "title": "고객별 공동 최다 품목",
+          "operation": "join",
+          "source": "s2",
+          "right": "s3",
+          "on": [
+            {
+              "left": "customer_id",
+              "right": "customer_id"
+            },
+            {
+              "left": "quantity",
+              "right": "peak"
+            }
+          ]
+        },
+        {
+          "id": "s5",
+          "title": "품목 결과 표시",
+          "operation": "query",
+          "source": "s4",
+          "select": [
+            "customer_id",
+            "product_id",
+            "product_name",
+            "quantity",
+            "amount",
+            "orders"
+          ],
+          "order_by": [
+            {
+              "column": "customer_id",
+              "direction": "asc"
+            }
+          ]
+        }
+      ],
+      "output": "s5"
+    }
+  },
+  {
+    "question": "오늘 가장 많이 주문된 제품을 구매한 고객 중 주문액이 가장 큰 고객은?",
+    "plan": {
+      "status": "ready",
+      "steps": [
+        {
+          "id": "s1",
+          "title": "오늘 주문량 공동 1위 제품",
+          "operation": "query",
+          "group_by": [
+            "product_id"
+          ],
+          "aggregates": [
+            {
+              "function": "sum",
+              "column": "quantity",
+              "alias": "quantity"
+            }
+          ],
+          "order_by": [
+            {
+              "column": "quantity",
+              "direction": "desc"
+            }
+          ],
+          "limit": 1,
+          "keep_ties": true
+        },
+        {
+          "id": "s2",
+          "title": "선정 제품의 고객별 주문액",
+          "operation": "query",
+          "filters": [
+            {
+              "column": "product_id",
+              "operator": "in",
+              "ref": {
+                "step": "s1",
+                "column": "product_id"
+              }
+            }
+          ],
+          "group_by": [
+            "customer_id",
+            "product_id"
+          ],
+          "aggregates": [
+            {
+              "function": "sum",
+              "column": "amount",
+              "alias": "amount"
+            },
+            {
+              "function": "sum",
+              "column": "quantity",
+              "alias": "quantity"
+            }
+          ],
+          "order_by": [
+            {
+              "column": "amount",
+              "direction": "desc"
+            }
+          ],
+          "limit": 1,
+          "keep_ties": true
+        }
+      ],
+      "output": "s2"
+    }
+  },
+  {
+    "question": "오늘 주문액 상위 5명과 전체 주문액 대비 점유율은?",
+    "plan": {
+      "status": "ready",
+      "steps": [
+        {
+          "id": "s1",
+          "title": "오늘 전체 주문액",
+          "operation": "query",
+          "aggregates": [
+            {
+              "function": "sum",
+              "column": "amount",
+              "alias": "amount"
+            }
+          ]
+        },
+        {
+          "id": "s2",
+          "title": "오늘 고객별 주문액",
+          "operation": "query",
+          "group_by": [
+            "customer_id"
+          ],
+          "aggregates": [
+            {
+              "function": "sum",
+              "column": "amount",
+              "alias": "amount"
+            }
+          ]
+        },
+        {
+          "id": "s3",
+          "title": "고객별 주문액 점유율",
+          "operation": "calculate",
+          "source": "s2",
+          "calculations": [
+            {
+              "alias": "share_pct",
+              "function": "percent",
+              "left": {
+                "column": "amount"
+              },
+              "right": {
+                "ref": {
+                  "step": "s1",
+                  "column": "amount"
+                }
+              }
+            }
+          ]
+        },
+        {
+          "id": "s4",
+          "title": "주문액 상위 5명과 점유율",
+          "operation": "query",
+          "source": "s3",
+          "order_by": [
+            {
+              "column": "amount",
+              "direction": "desc"
+            }
+          ],
+          "limit": 5,
+          "keep_ties": true
+        }
+      ],
+      "output": "s4"
+    }
+  },
+  {
+    "question": "오늘 주문액이 어제 전체보다 증가한 고객 상위 5명은?",
+    "plan": {
+      "status": "ready",
+      "steps": [
+        {
+          "id": "s1",
+          "title": "어제 고객별 주문액",
+          "operation": "query",
+          "period": {
+            "kind": "yesterday"
+          },
+          "group_by": [
+            "customer_id"
+          ],
+          "aggregates": [
+            {
+              "function": "sum",
+              "column": "amount",
+              "alias": "amount"
+            }
+          ]
+        },
+        {
+          "id": "s2",
+          "title": "오늘 고객별 주문액",
+          "operation": "query",
+          "period": {
+            "kind": "today"
+          },
+          "group_by": [
+            "customer_id"
+          ],
+          "aggregates": [
+            {
+              "function": "sum",
+              "column": "amount",
+              "alias": "amount"
+            }
+          ]
+        },
+        {
+          "id": "s3",
+          "title": "오늘과 어제 전체 비교",
+          "operation": "compare",
+          "source": "s2",
+          "right": "s1",
+          "keys": [
+            "customer_id"
+          ],
+          "metrics": [
+            "amount"
+          ]
+        },
+        {
+          "id": "s4",
+          "title": "주문액 증가 고객 순위",
+          "operation": "query",
+          "source": "s3",
+          "filters": [
+            {
+              "column": "delta_amount",
+              "operator": "gt",
+              "values": [
+                0
+              ]
+            }
+          ],
+          "order_by": [
+            {
+              "column": "delta_amount",
+              "direction": "desc"
+            }
+          ],
+          "limit": 5,
+          "keep_ties": true
+        }
+      ],
+      "output": "s4"
+    }
+  },
+  {
+    "question": "오늘 주문액 500만원 이상 고객들의 제품별 주문량을 알려줘",
+    "plan": {
+      "status": "ready",
+      "steps": [
+        {
+          "id": "s1",
+          "title": "고객별 총 주문액",
+          "operation": "query",
+          "group_by": [
+            "customer_id"
+          ],
+          "aggregates": [
+            {
+              "function": "sum",
+              "column": "amount",
+              "alias": "amount"
+            }
+          ]
+        },
+        {
+          "id": "s2",
+          "title": "주문액 500만원 이상 고객",
+          "operation": "query",
+          "source": "s1",
+          "filters": [
+            {
+              "column": "amount",
+              "operator": "ge",
+              "values": [
+                5000000
+              ]
+            }
+          ]
+        },
+        {
+          "id": "s3",
+          "title": "해당 고객의 오늘 제품별 주문량",
+          "operation": "query",
+          "filters": [
+            {
+              "column": "customer_id",
+              "operator": "in",
+              "ref": {
+                "step": "s2",
+                "column": "customer_id"
+              }
+            }
+          ],
+          "group_by": [
+            "customer_id",
+            "product_id",
+            "product_name"
+          ],
+          "aggregates": [
+            {
+              "function": "sum",
+              "column": "quantity",
+              "alias": "quantity"
+            }
+          ],
+          "order_by": [
+            {
+              "column": "quantity",
+              "direction": "desc"
+            }
+          ]
+        }
+      ],
+      "output": "s3"
+    }
+  },
+  {
+    "question": "최근 1시간 C004 주문량을 5분 단위로 알려줘",
+    "plan": {
+      "status": "ready",
+      "steps": [
+        {
+          "id": "s1",
+          "title": "최근 1시간 C004 주문량",
+          "operation": "query",
+          "period": {
+            "kind": "last1h"
+          },
+          "filters": [
+            {
+              "column": "customer_id",
+              "values": [
+                "C004"
+              ]
+            }
+          ],
+          "time_bucket": "5minutes",
+          "fill_gaps": true,
+          "group_by": [
+            "time_bucket",
+            "customer_id"
+          ],
+          "aggregates": [
+            {
+              "function": "sum",
+              "column": "quantity",
+              "alias": "quantity"
+            },
+            {
+              "function": "sum",
+              "column": "amount",
+              "alias": "amount"
+            },
+            {
+              "function": "count",
+              "column": "*",
+              "alias": "orders"
+            }
+          ],
+          "order_by": [
+            {
+              "column": "time_bucket",
+              "direction": "asc"
+            }
+          ]
+        }
+      ],
+      "output": "s1"
+    }
+  },
+  {
+    "question": "오늘 최근 주문 10건을 보여줘",
+    "plan": {
+      "status": "ready",
+      "steps": [
+        {
+          "id": "s1",
+          "title": "최근 주문",
+          "operation": "query",
+          "order_by": [
+            {
+              "column": "order_time",
+              "direction": "desc"
+            }
+          ],
+          "limit": 10
+        }
+      ],
+      "output": "s1"
+    }
+  },
+  {
+    "question": "최근 1시간 C004의 5분 단위 주문량 증감과 기간 내 누적 주문량을 알려줘",
+    "plan": {
+      "status": "ready",
+      "steps": [
+        {
+          "id": "s1",
+          "title": "최근 1시간 C004 주문량",
+          "operation": "query",
+          "period": {
+            "kind": "last1h"
+          },
+          "filters": [
+            {
+              "column": "customer_id",
+              "values": [
+                "C004"
+              ]
+            }
+          ],
+          "time_bucket": "5minutes",
+          "fill_gaps": true,
+          "group_by": [
+            "time_bucket",
+            "customer_id"
+          ],
+          "aggregates": [
+            {
+              "function": "sum",
+              "column": "quantity",
+              "alias": "quantity"
+            },
+            {
+              "function": "sum",
+              "column": "amount",
+              "alias": "amount"
+            },
+            {
+              "function": "count",
+              "column": "*",
+              "alias": "orders"
+            }
+          ],
+          "order_by": [
+            {
+              "column": "time_bucket",
+              "direction": "asc"
+            }
+          ]
+        },
+        {
+          "id": "s2",
+          "title": "고객별 직전 구간과 누적 수량",
+          "operation": "window",
+          "source": "s1",
+          "partition_by": [
+            "customer_id"
+          ],
+          "window_order_by": [
+            {
+              "column": "time_bucket",
+              "direction": "asc"
+            }
+          ],
+          "windows": [
+            {
+              "function": "lag",
+              "column": "quantity",
+              "alias": "previous_quantity"
+            },
+            {
+              "function": "running_sum",
+              "column": "quantity",
+              "alias": "cumulative_quantity"
+            }
+          ]
+        },
+        {
+          "id": "s3",
+          "title": "직전 구간 대비 수량 증감",
+          "operation": "calculate",
+          "source": "s2",
+          "calculations": [
+            {
+              "alias": "delta_quantity",
+              "function": "subtract",
+              "left": {
+                "column": "quantity"
+              },
+              "right": {
+                "column": "previous_quantity"
+              }
+            },
+            {
+              "alias": "delta_pct_quantity",
+              "function": "percent",
+              "left": {
+                "column": "delta_quantity"
+              },
+              "right": {
+                "column": "previous_quantity"
+              }
+            }
+          ]
+        }
+      ],
+      "output": "s3"
+    }
+  }
+]
