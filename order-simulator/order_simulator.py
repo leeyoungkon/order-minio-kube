@@ -7,6 +7,10 @@ from datetime import datetime
 import pymysql
 from pymysql import MySQLError as Error
 
+from datetime import datetime, timedelta, timezone
+
+KST = timezone(timedelta(hours=9))
+
 
 # ------------------------------------------------------
 # MySQL 설정
@@ -364,8 +368,7 @@ def generate_order(phase):
 
         "simulation_phase": phase,
 
-        "order_time": datetime.now()
-
+        "order_time": datetime.now(KST).replace(tzinfo=None)
     }
 
 
